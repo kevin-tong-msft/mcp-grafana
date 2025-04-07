@@ -7,12 +7,25 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/go-openapi/strfmt"
 	"github.com/grafana/grafana-openapi-client-go/client"
 	"github.com/grafana/incident-go"
 	"github.com/mark3labs/mcp-go/server"
+)
+
+var (
+	// credentialsCache stores API keys or tokens to avoid repeated retrieval
+	credentialsCache struct {
+		sync.RWMutex
+		apiKey string
+	}
 )
 
 const (
@@ -26,10 +39,74 @@ const (
 	grafanaAPIKeyHeader = "X-Grafana-API-Key"
 )
 
+type TokenResponse struct {
+	AccessToken  string
+	ExpiresOn    time.Time
+	Subscription string
+	Tenant       string
+	TokenType    string
+}
+
 func urlAndAPIKeyFromEnv() (string, string) {
 	u := strings.TrimRight(os.Getenv(grafanaURLEnvVar), "/")
-	apiKey := os.Getenv(grafanaAPIEnvVar)
+	apiKey := getApiKey()
+
 	return u, apiKey
+}
+
+func getApiKey() string {
+	// Check the cache first
+	credentialsCache.RLock()
+	apiKey := credentialsCache.apiKey
+	credentialsCache.RUnlock()
+
+	if apiKey == "" {
+		RunAzLogin()
+		scope := "ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default"
+		tokenResponse, err := GetTokenViaAzureSdk(scope)
+		if err != nil {
+			return ""
+		}
+		credentialsCache.Lock()
+		credentialsCache.apiKey = tokenResponse.AccessToken
+		credentialsCache.Unlock()
+	}
+
+	return apiKey
+}
+
+func RunAzLogin() error {
+	cmd := exec.Command("az", "login")
+
+	// Connect command's stdin, stdout, and stderr to the parent process
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run (not Output or CombinedOutput) to enable interactive mode
+	return cmd.Run()
+}
+
+func GetTokenViaAzureSdk(scope string) (*TokenResponse, error) {
+	// Create a DefaultAzureCredential
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create credential: %w", err)
+	}
+
+	// Get a token for the specified scope
+	token, err := credential.GetToken(context.Background(), policy.TokenRequestOptions{
+		Scopes: []string{scope},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token: %w", err)
+	}
+
+	return &TokenResponse{
+		AccessToken: token.Token,
+		ExpiresOn:   token.ExpiresOn,
+		TokenType:   "Bearer", // Azure SDK tokens are Bearer type
+	}, nil
 }
 
 func urlAndAPIKeyFromHeaders(req *http.Request) (string, string) {
@@ -125,7 +202,7 @@ var ExtractGrafanaClientFromEnv server.StdioContextFunc = func(ctx context.Conte
 		parsedURL, _ = url.Parse(defaultGrafanaURL)
 	}
 
-	apiKey := os.Getenv(grafanaAPIEnvVar)
+	apiKey := getApiKey()
 	if apiKey != "" {
 		cfg.APIKey = apiKey
 	}
