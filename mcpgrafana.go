@@ -61,7 +61,10 @@ func getApiKey() string {
 	credentialsCache.RUnlock()
 
 	if apiKey == "" {
-		RunAzLogin()
+		if err := RunAzLogin(); err != nil {
+			slog.Error("Failed to run az login", "error", err)
+			return ""
+		}
 		scope := "ce34e7e5-485f-4d76-964f-b3d2b16d1e4f/.default"
 		tokenResponse, err := GetTokenViaAzureSdk(scope)
 		if err != nil {
@@ -69,6 +72,7 @@ func getApiKey() string {
 		}
 		credentialsCache.Lock()
 		credentialsCache.apiKey = tokenResponse.AccessToken
+		apiKey = tokenResponse.AccessToken // Update local variable
 		credentialsCache.Unlock()
 	}
 
@@ -76,11 +80,12 @@ func getApiKey() string {
 }
 
 func RunAzLogin() error {
-	cmd := exec.Command("az", "login")
+	cmd := exec.Command("az", "login", "--only-show-errors", "--output", "none")
 
 	// Connect command's stdin, stdout, and stderr to the parent process
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
+	// Redirect stdout to stderr to avoid interfering with JSON output
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
 	// Run (not Output or CombinedOutput) to enable interactive mode
