@@ -20,12 +20,12 @@ func newServer() *server.MCPServer {
 	)
 	tools.AddSearchTools(s)
 	tools.AddDatasourceTools(s)
-	tools.AddIncidentTools(s)
+	// tools.AddIncidentTools(s)
 	tools.AddPrometheusTools(s)
-	tools.AddLokiTools(s)
+	// tools.AddLokiTools(s)
 	tools.AddAlertingTools(s)
 	tools.AddDashboardTools(s)
-	tools.AddOnCallTools(s)
+	// tools.AddOnCallTools(s)
 	return s
 }
 
